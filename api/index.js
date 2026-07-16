@@ -1,13 +1,17 @@
-// api/index.js - REST API Utama menggunakan Node.js & Express (Vercel Serverless)
+// api/index.js - REST API Utama dengan Fitur Registrasi & Login (JWT & Bcrypt)
 
 const express = require('express');
 const mysql = require('mysql2/promise');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const app = express();
 
-// Middleware agar Express dapat menerima dan membaca request body berformat JSON
 app.use(express.json());
 
-// Middleware CORS (Cross-Origin Resource Sharing)
+// Secret Key untuk enkripsi Token JWT (bisa diatur di environment variable Vercel)
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+
+// Middleware CORS
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -19,8 +23,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Konfigurasi Koneksi Database MySQL Aiven dengan SSL
-// Membaca dari Environment Variables (process.env) agar aman saat dipush ke GitHub!
+// Koneksi Database MySQL Aiven
 const pool = mysql.createPool({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT || 16481,
@@ -36,11 +39,115 @@ const pool = mysql.createPool({
     queueLimit: 0
 });
 
-// ----------------------------------------------------
-// READ (Tampil Semua & Cari Data)
-// GET /api/biodata atau GET /api/biodata?search=keyword
-// ----------------------------------------------------
-app.get('/api/biodata', async (req, res) => {
+// =========================================================================
+// MIDDLEWARE: VERIFIKASI TOKEN JWT (Mengamankan Rute Biodata)
+// =========================================================================
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Mengambil token dari format: "Bearer <token>"
+
+    if (!token) {
+        return res.status(401).json({
+            success: false,
+            message: 'Akses ditolak: Anda harus login terlebih dahulu!'
+        });
+    }
+
+    // Memverifikasi apakah token valid dan belum kedaluwarsa
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(403).json({
+                success: false,
+                message: 'Akses ditolak: Sesi Anda habis atau token tidak valid!'
+            });
+        }
+        req.user = decoded; // Menyimpan data identitas user yang didecode ke objek request
+        next(); // Melanjutkan ke rute utama
+    });
+};
+
+// =========================================================================
+// RUTE AUTHENTICATION (REGISTRASI & LOGIN)
+// =========================================================================
+
+// 1. REGISTRASI PENGGUNA BARU (POST /api/auth/register)
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ success: false, message: 'Username dan password wajib diisi!' });
+        }
+
+        // Cek apakah username sudah terdaftar di database
+        const [existingUser] = await pool.query('SELECT id FROM users WHERE username = ?', [username]);
+        if (existingUser.length > 0) {
+            return res.status(400).json({ success: false, message: 'Username sudah digunakan!' });
+        }
+
+        // Hashing password agar aman di database
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+        // Simpan user baru ke database
+        const sql = 'INSERT INTO users (username, password) VALUES (?, ?)';
+        await pool.query(sql, [username, hashedPassword]);
+
+        res.status(201).json({
+            success: true,
+            message: 'Pendaftaran berhasil! Silakan login.'
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Registrasi gagal: ' + error.message });
+    }
+});
+
+// 2. LOGIN PENGGUNA (POST /api/auth/login)
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        if (!username || !password) {
+            return res.status(400).json({ success: false, message: 'Username dan password wajib diisi!' });
+        }
+
+        // Cari user berdasarkan username
+        const [users] = await pool.query('SELECT * FROM users WHERE username = ?', [username]);
+        if (users.length === 0) {
+            return res.status(401).json({ success: false, message: 'Username atau password salah!' });
+        }
+
+        const user = users[0];
+
+        // Bandingkan password input dengan password hash yang ada di database
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ success: false, message: 'Username atau password salah!' });
+        }
+
+        // Jika berhasil, buat Token JWT (berlaku selama 7 hari)
+        const token = jwt.sign(
+            { id: user.id, username: user.username },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Login berhasil!',
+            token: token // Mengirimkan token ke aplikasi Android
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Login gagal: ' + error.message });
+    }
+});
+
+// =========================================================================
+// RUTE BIODATA (SEKARANG DIPROTEKSI OLEH authenticateToken)
+// =========================================================================
+
+// GET all or search (Protected)
+app.get('/api/biodata', authenticateToken, async (req, res) => {
     try {
         const { search } = req.query;
         let sql = 'SELECT * FROM biodata ORDER BY id DESC';
@@ -64,11 +171,8 @@ app.get('/api/biodata', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
-// CREATE (Simpan Data Baru)
-// POST /api/biodata dengan body JSON
-// ----------------------------------------------------
-app.post('/api/biodata', async (req, res) => {
+// POST insert (Protected)
+app.post('/api/biodata', authenticateToken, async (req, res) => {
     try {
         const { nama, agama, usia, tanggal_lahir } = req.body;
 
@@ -95,11 +199,8 @@ app.post('/api/biodata', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
-// UPDATE (Perbarui Data)
-// PUT /api/biodata dengan body JSON
-// ----------------------------------------------------
-app.put('/api/biodata', async (req, res) => {
+// PUT update (Protected)
+app.put('/api/biodata', authenticateToken, async (req, res) => {
     try {
         const { id, nama, agama, usia, tanggal_lahir } = req.body;
 
@@ -125,11 +226,8 @@ app.put('/api/biodata', async (req, res) => {
     }
 });
 
-// ----------------------------------------------------
-// DELETE (Hapus Data)
-// DELETE /api/biodata?id=X
-// ----------------------------------------------------
-app.delete('/api/biodata', async (req, res) => {
+// DELETE (Protected)
+app.delete('/api/biodata', authenticateToken, async (req, res) => {
     try {
         const { id } = req.query;
 
