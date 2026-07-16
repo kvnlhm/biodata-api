@@ -27,6 +27,7 @@ const pool = mysql.createPool({
     user: process.env.DB_USER || 'avnadmin',
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME || 'defaultdb',
+    dateStrings: true, // Mengembalikan kolom DATE sebagai string murni (YYYY-MM-DD)
     ssl: {
         rejectUnauthorized: false
     },
