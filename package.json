@@ -1,0 +1,13 @@
+{
+  "name": "biodata-api",
+  "version": "1.0.0",
+  "description": "REST API Biodata untuk Aplikasi Android menggunakan Node.js dan Express",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mysql2": "^3.10.2"
+  }
+}

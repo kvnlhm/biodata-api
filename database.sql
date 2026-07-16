@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS biodata (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    nama VARCHAR(100) NOT NULL,
+    agama VARCHAR(50) NOT NULL,
+    usia INT NOT NULL,
+    tanggal_lahir DATE NOT NULL
+);
